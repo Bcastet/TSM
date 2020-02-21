@@ -16,12 +16,17 @@
 
 #include "gnuplot_i.h"
 
+
 /* taille de la fenetre */
-#define	FRAME_SIZE 4410
+#define	FRAME_SIZE 1024
 #define	ZERO_PADDING 0
 #define	FFT_SIZE (FRAME_SIZE+ZERO_PADDING)
 /* avancement */
-#define HOP_SIZE 4410
+#define HOP_SIZE 1024
+/* réglage autocorrélation */
+#define JUMP 2
+/*octave*/
+#define OCTAVE 0
 
 static gnuplot_ctrl *h;
 
@@ -180,6 +185,70 @@ double fenetreHann(int index, size_t size)
 {
     return 0.5 - 0.5* cos(2 *M_PI *index /(size*1.0));
 }
+int max(double* r1,int trunc_index){
+    double max = 0;
+    int max_index = 0;
+    for(int i=trunc_index;i<FRAME_SIZE;i++)
+        if(r1[i]>max){ max = r1[i]; max_index=i;}
+    return max_index;
+}
+
+int max_with_jump(double* r1){
+    int pics_visited = 0;
+    for(int i=0;i<FRAME_SIZE;i++){
+        if(r1[i]>0 && r1[i+1]<0) pics_visited+=1;
+        if(pics_visited == JUMP) return max(r1,i);
+    }
+    return 0;
+}
+int notes(double* fourier_samples,char** notes){
+    int notes_found = -1;
+    for(int freq=15;freq<FFT_SIZE/2-1;freq++){
+        printf("Sample %d\n",freq);
+        if(fourier_samples[freq]>0.02 && fourier_samples[freq]>fourier_samples[freq-1] && fourier_samples[freq]>fourier_samples[freq+1]){
+            printf("Testing notes\n");
+            if(freq>15*pow(2,OCTAVE) && freq<17*pow(2,OCTAVE)){
+                notes[notes_found]="Do";
+            }
+            if(freq>17*pow(2,OCTAVE) && freq<18*pow(2,OCTAVE) ){
+                notes[notes_found]="Do#";
+            }
+            if(freq>18*pow(2,OCTAVE) && freq<19*pow(2,OCTAVE)){
+                notes[notes_found]="Ré";
+            }
+            if(freq>19*pow(2,OCTAVE) && freq<20*pow(2,OCTAVE)){
+                notes[notes_found]="Ré#";
+            }
+            if(freq>20*pow(2,OCTAVE) && freq<21*pow(2,OCTAVE) ){
+                notes[notes_found]="Mi";
+            }
+            if(freq>21*pow(2,OCTAVE) && freq<22.5*pow(2,OCTAVE) ){
+                notes[notes_found]="Fa";
+            }
+            if(freq>22.5*pow(2,OCTAVE) && freq<24*pow(2,OCTAVE) ){
+                notes[notes_found]="Fa#";
+            }
+            if(freq>24*pow(2,OCTAVE) && freq<25.5*pow(2,OCTAVE) ){
+                notes[notes_found]="Sol";
+            }
+            if(freq>25.5*pow(2,OCTAVE) && freq<26.8*pow(2,OCTAVE) ){
+                notes[notes_found]="Sol#";
+            }
+            if(freq>26.8*pow(2,OCTAVE) && freq<28*pow(2,OCTAVE) ){
+                notes[notes_found]="La";
+            }
+            if(freq>28*pow(2,OCTAVE) && freq<29.5*pow(2,OCTAVE) ){
+                notes[notes_found]="La#";
+            }
+            if(freq>29.5*pow(2,OCTAVE) && freq<32*pow(2,OCTAVE) ){
+                notes[notes_found]="Si";
+            }
+            notes_found++;
+        }
+    }
+    return notes_found;
+}
+
 
 int main (int argc, char * argv [])
 {
@@ -244,8 +313,8 @@ int main (int argc, char * argv [])
     clock_t t1,t2;
     double delta_t=0;
 
-    double numbers[12];
-    double numbersbis[12];
+    /*double numbers[12];
+    double numbersbis[12];*/
     while (read_samples (infile, new_buffer, sfinfo.channels)==1)
     {
         /* Process Samples */
@@ -255,13 +324,25 @@ int main (int argc, char * argv [])
         fill_buffer(buffer, new_buffer);
 
         /* Fourrier */
-        /*
+        
         t1=clock();
         dft(buffer, data_in, FRAME_SIZE, false);
         t2=clock();
         delta_t += t2-t1;
-        */
-
+        
+       //Auto-corrélation
+        /*double r1[FRAME_SIZE];
+        for(int to=0;to<FRAME_SIZE;to++){
+            double tmp = 0;
+            for(int n=0;n<FRAME_SIZE-to;n++){
+                tmp+=buffer[n] * buffer[n+to];
+            }
+            r1[to] = (1.0/FRAME_SIZE) * tmp;
+        }
+        int max = max_with_jump(r1);
+        printf("Max index: %d\n",max);
+        double freq = 44100.0/max;*/
+        
         /* Fourrier rapide */
 
         int i;
@@ -272,11 +353,12 @@ int main (int argc, char * argv [])
         for(; i<FFT_SIZE; i++){
             data_in[i]= 0;
         }
+        
         t1=clock();
         fftw_execute(tofreq);
         t2=clock();
         delta_t += t2-t1;
-
+        
 
         /* Visu amplitude */
 
@@ -290,17 +372,19 @@ int main (int argc, char * argv [])
         double ampMax_bis = maxFreqBis(ampSpectre, FFT_SIZE, &freqMaxBis, sfinfo.samplerate);
         printf("Frequence max : %lf Hertz, value %lf \n", freqMax, ampMax);
         printf("Frequence max bis : %lf Hertz, value %lf\n",freqMaxBis, ampMax_bis);
-        if(nb_frames%3 ==0){
-            printf("ASSIGNING THIS TO NUMBERS AND NUMBERSBIS %d\n",nb_frames);
-            numbers[nb_frames/3] = freqMax;
-            numbersbis[nb_frames/3] = freqMaxBis; 
-        }
+        
         //Normalisation amplitude
+        
         for (int i=0; i< FFT_SIZE; i++)
         {
-            ampSpectre[i] = ampSpectre[i]/(FRAME_SIZE/2);
+            ampSpectre[i] = ampSpectre[i]/(FFT_SIZE/2);
         }
-
+        char** notes_char;
+        int notes_found = notes(ampSpectre,notes_char);
+        printf("Accord : ");
+        for(int i=0;i<notes_found;i++) printf("%s ",notes_char[i]);
+        printf("\n");
+        
         /* FFTW to real */
         /*
         fftw_execute(toreal);
@@ -311,7 +395,7 @@ int main (int argc, char * argv [])
         */
 
         /* PLOT */
-        double x_axis[FFT_SIZE];
+        double x_axis[FRAME_SIZE];
         // Temporal
         /*
         for (int i=0 ; i<N ; i++) {
@@ -320,29 +404,24 @@ int main (int argc, char * argv [])
         */
 
         // Frequential
-        for (int i=0 ; i<FFT_SIZE ; i++) {
+        /*for (int i=0 ; i<FFT_SIZE ; i++) {
             x_axis[i] = i * sfinfo.samplerate / FFT_SIZE;
+        }*/
+        for (int i=0 ; i<FFT_SIZE/2 ; i++) {
+            x_axis[i] = i;
         }
-
         gnuplot_resetplot(h);
         //gnuplot_plot_xy(h, x_axis, buffer,FRAME_SIZE,"temporal frame");
-        gnuplot_plot_xy(h, x_axis, ampSpectre, FFT_SIZE/2, "frequence frame");
+        gnuplot_plot_xy(h, x_axis, ampSpectre, FRAME_SIZE, "Autocorrélation frame");
         usleep(200*(10e3));
 
         nb_frames++;
     }
-    printf("le temps moyen de traitement est de %f secondes \n", (delta_t / nb_frames)/CLOCKS_PER_SEC);
+    
     fftw_destroy_plan(tofreq);
     fftw_destroy_plan(toreal);
 
     sf_close (infile) ;
-    for(int i=0;i<12;i++){
-        printf("For number %d\n",i);
-        printf("1sin : %lf\n",numbers[i]);
-        printf("2sin : %lf\n",numbersbis[i]);
-    }
-
-    printf("telA.wav phone number is:94 57 ")
     return 0 ;
 } /* main */
 
